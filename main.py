@@ -12,7 +12,7 @@ def main():
     while 1:
         p.stepSimulation()
         DE.camera_system(num_cameras,False)
-        DE.RGBDcapture(num_cameras,True,i)
+        DE.RGBDcapture(num_cameras,False,i)
         i=i+1
     #p.disconnect()
     
