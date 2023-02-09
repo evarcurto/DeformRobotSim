@@ -1,102 +1,197 @@
 import pybullet as p
-import pybullet_data
 import numpy as np
 import time
 import os
-import franka_emika_panda_pybullet
-from franka_emika_panda_pybullet.panda_robot import PandaRobot
-from franka_emika_panda_pybullet.movement_datasets import read_fep_dataset
 from pathlib import Path
 from PIL import Image
 import matplotlib.pyplot as plt
+import math
+#from pybullet_envs.examples import panda_sim
+#import pybullet_data
+
+import panda_sim
 
 
 
 class DefEnv:
    
-    def __init__(self, gui = True) -> None:
-
+    def __init__(self, bullet_client, gui = True) -> None:
+        self.bullet_client = bullet_client
         self.gui = gui
         if self.gui == True:
             # connect bullet
-            p.connect(p.GUI) #or p.GUI (for test) or p.DIRECT (for train) for non-graphical version
+            self.bullet_client.connect(self.bullet_client.GUI) #or p.GUI (for test) or p.DIRECT (for train) for non-graphical version
         else:
-            p.connect(p.DIRECT) 
+            self.bullet_client.connect(self.bullet_client.DIRECT) 
 
         #p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setAdditionalSearchPath(os.path.dirname(__file__) + '/objects')
-        self.startOrientation = p.getQuaternionFromEuler([0,0,0])
-        self.include_gripper = True
-
-        self.timeStep = 0.003
-        self.n_substeps = 20
-        self.dt = self.timeStep*self.n_substeps
-        self.max_vel = 100
+        self.bullet_client.setAdditionalSearchPath(os.path.dirname(__file__) + '/objects') #só posso usar uma vez este comando senão o segundo sobrepom-se ao primeiro
 
         #directory to save RGBD captures
         self.disk_dir = Path("data/frames/")
         self.disk_dir.mkdir(parents=True, exist_ok=True)
 
-        
+        self.bullet_client.setPhysicsEngineParameter(solverResidualThreshold=0)
+        self.flags = self.bullet_client.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
+
+        self.state = 0
+        self.control_dt = 1./240.
+        #self.control_dt = 1./120.
+        self.finger_target = 0
+        #self.gripper_height = 0.2
+        self.t = 0
+        self.state_t = 0
+        self.cur_state = 0
+        #self.states=[0,1,2,3,4,5]
+        #self.state_durations=[1,1,1,2,1,1]
+        self.bullet_client.setGravity(0, 0, -9.81)
 
     def initial_reset(self):
         # reset pybullet to deformable object
-        p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
-        # simulation time
-        p.setGravity(0, 0, -9.81)
+        self.bullet_client.resetSimulation(self.bullet_client.RESET_USE_DEFORMABLE_WORLD)
+        # set gravity
+        
 
         self.load_plane()
         self.load_table()
         self.load_deformable_object()
         self.load_cube() 
-        self.create_anchors()
+        #self.create_anchors()
+
+        # robot initialization
         self.load_panda()
+        self.panda_initial_positions()
 
         self.camera_system(4,True)
-        p.stepSimulation()
+        #p.stepSimulation()
 
+        #self.sim_panda()
         #self.panda_trajectory()
-        self.my_panda_trajectory()
-        p.stepSimulation()
+        #self.my_panda_trajectory()
+        #p.stepSimulation()
 
         #p.setPhysicsEngineParameter(numSubSteps = self.n_substeps)
         #p.setTimeStep(self.timeStep)
-        p.stepSimulation()
+        #p.stepSimulation()
+
+        #self.panda = panda_sim.PandaSim(p,[0,0,0])
 
         
     def load_plane(self):
-        self.planeId = p.loadURDF("plane/plane.urdf", useFixedBase=True)
+        self.planeId = self.bullet_client.loadURDF("plane/plane.urdf", useFixedBase=True,flags=self.flags)
 
     def load_table(self):
         #self.table_startPos = [0, 0, 0.81]
         self.table_startPos = [0, 0, 0]
-        self.tableId= p.loadURDF("table/table.urdf", self.table_startPos, useFixedBase=True)
+        self.tableId= self.bullet_client.loadURDF("table/table.urdf", self.table_startPos, useFixedBase=True,flags=self.flags)
         self.table_height = 0.625
 	
     def load_deformable_object(self):
         #self.def_startPos = [panda_eff_state[0][0], panda_eff_state[0][1], 0.0]
-        self.def_startPos = [0.35, 0, self.table_startPos[2]+self.table_height+0.05] #caso cilindro na horizontal
-        self.def_startOrientation = p.getQuaternionFromEuler([0,1.57,0]) #caso cilindro na horizontal
+        self.def_startPos = [0.35+0.06, 0, self.table_startPos[2]+self.table_height+0.05] #caso cilindro na horizontal
+        self.def_startOrientation = self.bullet_client.getQuaternionFromEuler([0,1.57,0]) #caso cilindro na horizontal
         #self.def_startPos = [0.25, 0, self.table_startPos[2]+self.table_height+0.5] #caso cilindro na vertical
-        #self.def_startOrientation = p.getQuaternionFromEuler([0,0,0]) #caso cilindro na vertical
+        #self.def_startOrientation = self.bullet_client.getQuaternionFromEuler([0,0,0]) #caso cilindro na vertical
         
-        self.defId = p.loadSoftBody(fileName= 'Mymeshes/hollow_cylinder_scaled.vtk',basePosition = self.def_startPos, baseOrientation=self.def_startOrientation, scale = 1, mass = 1, useNeoHookean = 0, useBendingSprings=1,useMassSpring=1, springElasticStiffness=40, springDampingStiffness=.1, springDampingAllDirections = 1, useSelfCollision = 0, frictionCoeff = .5, useFaceContact=1,collisionMargin = 0.001)
+        #self.defId = self.bullet_client.loadSoftBody(fileName= 'Mymeshes/hollow_cylinder_scaled.vtk',basePosition = self.def_startPos, 
+        #baseOrientation=self.def_startOrientation, scale = 0.8, mass = 0.2, useNeoHookean = 0, useBendingSprings=1,useMassSpring=1, springElasticStiffness=40, springDampingStiffness=.1, springDampingAllDirections = 1, useSelfCollision = 0, frictionCoeff = .5, useFaceContact=1,collisionMargin = 0.001)
+        
+        self.defId = self.bullet_client.loadSoftBody(fileName= 'Mymeshes/hollow_cylinder_scaled.vtk',basePosition = self.def_startPos, 
+        baseOrientation=self.def_startOrientation, scale = 0.8,  mass = 0.1, useNeoHookean = 1, collisionMargin = 0.001, frictionCoeff = 0.5,
+                        NeoHookeanMu = 15, NeoHookeanLambda = 10, NeoHookeanDamping = 0.005)
+
+
 
     def load_cube(self):
         self.cube_startPos = [0.7, 0, self.table_startPos[2]+self.table_height+0.05]
-        self.cubeId = p.loadURDF("cube/cube.urdf", self.cube_startPos, useFixedBase=True, globalScaling = 0.1)
+        self.cubeId = self.bullet_client.loadURDF("cube/cube.urdf", self.cube_startPos, useFixedBase=True, globalScaling = 0.1,flags=self.flags)
 
     def load_panda(self):
         self.panda_startPos = [-0.6, 0, self.table_startPos[2]+self.table_height]
-        self.panda_startOrientation = self.startOrientation
-        panda_model = "model_description/panda_with_gripper.urdf" if self.include_gripper else "model_description/panda.urdf"
-        self.pandaId = p.loadURDF(panda_model, basePosition=self.panda_startPos, baseOrientation=self.panda_startOrientation, useFixedBase=True, flags=p.URDF_USE_SELF_COLLISION)
-        self.panda_num_joints = p.getNumJoints(self.pandaId) # 12joints(caso franka panda)	7-joint franka emika panda without gripper 10-joint franka emika panda with gripper
+        #self.panda_startOrientation = self.startOrientation
+        panda_model = "franka_panda/panda.urdf"
+        self.pandaId = self.bullet_client.loadURDF(panda_model, basePosition=self.panda_startPos, useFixedBase=True,flags=self.flags)
+        self.panda_num_joints = self.bullet_client.getNumJoints(self.pandaId) # 12joints(caso franka panda)
         print("Panda num joints: ", self.panda_num_joints)
 
-        self.dof = p.getNumJoints(self.pandaId)-1
+        self.dof = self.bullet_client.getNumJoints(self.pandaId)-1
         print("Panda DOF: ", self.dof)
         self.joints = range(self.dof)	
+
+    def panda_initial_positions(self):
+        self.useNullSpace = 1
+        self.ikSolver = 0
+        self.pandaEndEffectorIndex = 11 #8
+        self.pandaNumDofs = 7
+        self.ll = [-7]*self.pandaNumDofs
+        #upper limits for null space (todo: set them to proper range)
+        self.ul = [7]*self.pandaNumDofs
+        #joint ranges for null space (todo: set them to proper range)
+        self.jr = [7]*self.pandaNumDofs
+        #restposes for null space
+        self.jointPositions=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02]
+        self.rp = self.jointPositions
+
+        index = 0
+ 
+        for j in range(self.panda_num_joints):
+            self.bullet_client.changeDynamics(self.pandaId, j, linearDamping=0, angularDamping=0)
+            info = self.bullet_client.getJointInfo(self.pandaId, j)
+            #print("info=",info)
+            jointName = info[1]
+            jointType = info[2]
+            if (jointType == self.bullet_client.JOINT_PRISMATIC):
+                self.bullet_client.resetJointState(self.pandaId, j, self.jointPositions[index]) 
+                index=index+1
+            if (jointType == self.bullet_client.JOINT_REVOLUTE):
+                self.bullet_client.resetJointState(self.pandaId, j, self.jointPositions[index]) 
+                index=index+1
+        
+
+
+    def grab_object(self):
+        self.camera_system(4,False)
+        print("self.state=",self.state)
+        print("self.state_t=", self.state_t)
+        if self.state==4:
+            self.finger_target = 0.08
+            self.create_anchors()
+        if self.state==2:
+            self.finger_target = 0.1
+        self.bullet_client.submitProfileTiming("step")
+        
+        self.update_state()
+
+        if self.state==1 or self.state==3 or self.state==5 or self.state==6:
+            self.gripper_height = self.table_startPos[2]+self.table_height+0.053
+            if self.state==1 or self.state==5 or self.state==6:
+                self.gripper_height = self.table_startPos[2]+self.table_height+0.25
+
+            t = self.t
+            self.t += self.control_dt
+            if self.state == 1 or self.state== 3 or self.state == 5:
+                pos, o = self.bullet_client.getBasePositionAndOrientation(self.defId)
+                pos = [pos[0]-0.2, pos[1], self.gripper_height]
+                self.prev_pos = pos
+            if self.state == 6:
+                pos = self.prev_pos
+                diffX = pos[0] 
+                diffY = pos[1] 
+                self.prev_pos = [self.prev_pos[0] - diffX*0.1, self.prev_pos[1]-diffY*0.1, self.prev_pos[2]]
+        
+            orn = self.bullet_client.getQuaternionFromEuler([math.pi,0.,0.])
+            self.bullet_client.submitProfileTiming("IK")
+            jointPoses = self.bullet_client.calculateInverseKinematics(self.pandaId,self.pandaEndEffectorIndex, pos, orn, self.ll, self.ul,
+            self.jr, self.rp, maxNumIterations=20)
+            self.bullet_client.submitProfileTiming()
+            for i in range(self.pandaNumDofs):
+                self.bullet_client.setJointMotorControl2(self.pandaId, i, self.bullet_client.POSITION_CONTROL, jointPoses[i],force=5 * 240.)
+        for i in [9,10]:
+            self.bullet_client.setJointMotorControl2(self.pandaId, i, self.bullet_client.POSITION_CONTROL,self.finger_target ,force= 10)
+
+
+
+                   
 
     def create_anchors(self):
         data = p.getMeshData(self.defId, -1, flags=p.MESH_DATA_SIMULATION_MESH)
@@ -105,8 +200,8 @@ class DefEnv:
             pose =list(data[1][i])
             p.createSoftBodyAnchor(self.defId ,i, self.cubeId, -1) #anchor: the right face of the cylinder is fixed to the cube
             #p.addUserDebugText("*", pose, textColorRGB=[0,0,0])
-        #for i in range(0,106,2):
-        #    p.createSoftBodyAnchor(self.defId,i, self.pandaId, self.panda_end_eff_idx)
+        for i in range(0,106,2):
+            p.createSoftBodyAnchor(self.defId,i, self.pandaId, self.pandaEndEffectorIndex)
 
     def show_cartesian_sliders(self):
         self.list_slider_cartesian = []
@@ -173,17 +268,9 @@ class DefEnv:
             p.stepSimulation()
             time.sleep(SAMPLING_RATE)
 
-    def calculate_inverse_kinematics(self, position):
-        #Returns a list of joint positions for each degree of freedom, so the legth of this list is the number of degrees of freedom
-        Jointpos = p.calculateInverseKinematics(self.pandaId, self.dof, position, solver=0)
-        return list(Jointpos)
 
-    def set_target_positions(self, desired_Jointpos):
-        # If robot set up with gripper, set those positions to 0
-        p.setJointMotorControlArray(bodyUniqueId=self.pandaId,
-                                    jointIndices=self.joints,
-                                    controlMode=p.POSITION_CONTROL,
-                                    targetPositions=desired_Jointpos)
+
+
     
     def camera_system(self, num_cameras: int, show_views: bool):
         self.width = 640
@@ -234,16 +321,34 @@ class DefEnv:
         width, height, rgbImg, depthImg, segImg  = p.getCameraImage(self.width, self.height, view_matrix, projection_matrix)
         return width, height, rgbImg, depthImg, segImg
 
-    def RGBDcapture(self,num_cameras, capture: bool, i: int):
+    def RGBDcapture(self,num_cameras, capture: bool, i: float):
         if capture == True:
             for c in range(num_cameras):
                 image_id=i
+                print("image_id=", image_id)
                 Image.fromarray(self.rgba_array[c]).save(self.disk_dir / f"rgb_cam{c+1}_im{image_id}.png")
                 new_p1 = Image.fromarray((self.depth_opengl_array[c]* 255).astype(np.uint8))
                 new_p1.save(self.disk_dir / f"depth_cam{c+1}_im{image_id}.png")
             
 
-        
-
-
-   
+class PandaSimAuto(DefEnv):
+  def __init__(self, bullet_client):
+    DefEnv.__init__(self, bullet_client)
+    self.state_t = 0
+    self.cur_state = 0
+    #self.states=[0,1,2,3,4,5,6]
+    self.states=[0,1,2,3,4,5,6]
+    self.state_durations=[0.01,0.2,0.1,0.05,0.05,0.2,0.5]
+  
+  def update_state(self):
+    self.state_t += self.control_dt
+    if self.state==5 or self.state==6:
+        inst_frame = round(self.state_t,3)
+        self.RGBDcapture(4, False, inst_frame)
+    if self.state_t > self.state_durations[self.cur_state]:
+      self.cur_state += 1
+      if self.cur_state>=len(self.states):
+        self.cur_state = 5
+      self.state_t = 0
+      self.state=self.states[self.cur_state]
+      print("self.state=",self.state)
