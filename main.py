@@ -3,8 +3,6 @@ import time
 from deform_env import DefEnv
 from deform_env import PandaSimAuto
 
-#import panda_sim
-
 
 def main():
 

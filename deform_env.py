@@ -6,12 +6,6 @@ from pathlib import Path
 from PIL import Image
 import matplotlib.pyplot as plt
 import math
-#from pybullet_envs.examples import panda_sim
-#import pybullet_data
-
-import panda_sim
-
-
 
 class DefEnv:
    
@@ -36,58 +30,37 @@ class DefEnv:
 
         self.state = 0
         self.control_dt = 1./240.
-        #self.control_dt = 1./120.
         self.finger_target = 0
-        #self.gripper_height = 0.2
         self.t = 0
         self.state_t = 0
         self.cur_state = 0
-        #self.states=[0,1,2,3,4,5]
-        #self.state_durations=[1,1,1,2,1,1]
+        # set gravity
         self.bullet_client.setGravity(0, 0, -9.81)
 
     def initial_reset(self):
         # reset pybullet to deformable object
         self.bullet_client.resetSimulation(self.bullet_client.RESET_USE_DEFORMABLE_WORLD)
-        # set gravity
         
-
         self.load_plane()
         self.load_table()
         self.load_deformable_object()
         self.load_cube() 
-        #self.create_anchors()
 
         # robot initialization
         self.load_panda()
         self.panda_initial_positions()
 
         self.camera_system(4,True)
-        #p.stepSimulation()
-
-        #self.sim_panda()
-        #self.panda_trajectory()
-        #self.my_panda_trajectory()
-        #p.stepSimulation()
-
-        #p.setPhysicsEngineParameter(numSubSteps = self.n_substeps)
-        #p.setTimeStep(self.timeStep)
-        #p.stepSimulation()
-
-        #self.panda = panda_sim.PandaSim(p,[0,0,0])
-
         
     def load_plane(self):
         self.planeId = self.bullet_client.loadURDF("plane/plane.urdf", useFixedBase=True,flags=self.flags)
 
     def load_table(self):
-        #self.table_startPos = [0, 0, 0.81]
         self.table_startPos = [0, 0, 0]
         self.tableId= self.bullet_client.loadURDF("table/table.urdf", self.table_startPos, useFixedBase=True,flags=self.flags)
         self.table_height = 0.625
 	
     def load_deformable_object(self):
-        #self.def_startPos = [panda_eff_state[0][0], panda_eff_state[0][1], 0.0]
         self.def_startPos = [0.35+0.06, 0, self.table_startPos[2]+self.table_height+0.05] #caso cilindro na horizontal
         self.def_startOrientation = self.bullet_client.getQuaternionFromEuler([0,1.57,0]) #caso cilindro na horizontal
         #self.def_startPos = [0.25, 0, self.table_startPos[2]+self.table_height+0.5] #caso cilindro na vertical
@@ -108,7 +81,6 @@ class DefEnv:
 
     def load_panda(self):
         self.panda_startPos = [-0.6, 0, self.table_startPos[2]+self.table_height]
-        #self.panda_startOrientation = self.startOrientation
         panda_model = "franka_panda/panda.urdf"
         self.pandaId = self.bullet_client.loadURDF(panda_model, basePosition=self.panda_startPos, useFixedBase=True,flags=self.flags)
         self.panda_num_joints = self.bullet_client.getNumJoints(self.pandaId) # 12joints(caso franka panda)
@@ -147,8 +119,6 @@ class DefEnv:
                 self.bullet_client.resetJointState(self.pandaId, j, self.jointPositions[index]) 
                 index=index+1
         
-
-
     def grab_object(self):
         self.camera_system(4,False)
         print("self.state=",self.state)
@@ -189,10 +159,6 @@ class DefEnv:
         for i in [9,10]:
             self.bullet_client.setJointMotorControl2(self.pandaId, i, self.bullet_client.POSITION_CONTROL,self.finger_target ,force= 10)
 
-
-
-                   
-
     def create_anchors(self):
         data = p.getMeshData(self.defId, -1, flags=p.MESH_DATA_SIMULATION_MESH)
         #For the case of the hollow cylinder
@@ -203,75 +169,6 @@ class DefEnv:
         for i in range(0,106,2):
             p.createSoftBodyAnchor(self.defId,i, self.pandaId, self.pandaEndEffectorIndex)
 
-    def show_cartesian_sliders(self):
-        self.list_slider_cartesian = []
-        self.list_slider_cartesian.append(p.addUserDebugParameter("VX", -1, 1, 0))
-        self.list_slider_cartesian.append(p.addUserDebugParameter("VY", -1, 1, 0))
-        self.list_slider_cartesian.append(p.addUserDebugParameter("VZ", -1, 1, 0))
-        self.list_slider_cartesian.append(p.addUserDebugParameter("Theta_Dot", -1, 1, 0))    
-
-    def apply_cartesian_sliders(self):
-        action = np.empty(4, dtype=np.float64)
-        
-        for i in range(4):
-            action[i] = p.readUserDebugParameter(self.list_slider_cartesian[i])
-        
-        self.set_action(action)
-        p.stepSimulation()
-
-    def set_action(self, action):
-        cur_state = p.getLinkState(self.pandaId, self.panda_end_eff_idx)
-        cur_pos = np.array(cur_state[0])
-        cur_orien = np.array(cur_state[1])
-        
-        new_pos = cur_pos + np.array(action[:3]) * self.max_vel * self.dt
-        #new_pos = np.clip(new_pos, self.pos_space.low, self.pos_space.high) #to limit space
-        
-        jointPoses = p.calculateInverseKinematics(self.pandaId, self.panda_end_eff_idx, new_pos, cur_orien)[0:7]
-        
-        for i in range(len(jointPoses)):
-            p.setJointMotorControl2(self.pandaId, i, p.POSITION_CONTROL, jointPoses[i],force=10 * 240.)
-  
-    def my_panda_trajectory(self):
-        # Set up variables for simulation loop
-        SAMPLING_RATE = 1e-2  # 1000Hz sampling rate
-        period = 1 / SAMPLING_RATE
-        self.counter_seconds = -1
-
-        pos = np.array([[0, 0, 0.65],
-                   [0.1, 0, 0.60],
-                   [0.2, 0, 0.55],
-                   [0.3, 0, 0.50],
-                   [0.3, 0, 0.45],
-                   [0.35, 0, 0.40],
-                   [0.40, 0, 0.35],
-                   [0.45, 0, 0.00]])
-        dataset_length = pos.shape[0]
-
-        # start simulation loop
-        for i in range(dataset_length):
-        # Print status update every second of the simulation
-            if i % period == 0:
-                self.counter_seconds += 1
-                print("Passed time in simulation: {:>4} sec".format(self.counter_seconds))
-
-            #cur_state = p.getLinkState(self.pandaId, self.dof)
-            #cur_pos = np.array(cur_state[0])
-            #new_pos = cur_pos + pos[i]
-
-            JointPos = self.calculate_inverse_kinematics(pos[i])
-            #print(JointPos) #9
-            #converter sel.JointPos em lista antes de usar set_target_positions
-            self.set_target_positions(JointPos)
-
-            # Perform simulation step
-            p.stepSimulation()
-            time.sleep(SAMPLING_RATE)
-
-
-
-
-    
     def camera_system(self, num_cameras: int, show_views: bool):
         self.width = 640
         self.height = 480
@@ -330,6 +227,34 @@ class DefEnv:
                 new_p1 = Image.fromarray((self.depth_opengl_array[c]* 255).astype(np.uint8))
                 new_p1.save(self.disk_dir / f"depth_cam{c+1}_im{image_id}.png")
             
+    def show_cartesian_sliders(self):
+        self.list_slider_cartesian = []
+        self.list_slider_cartesian.append(p.addUserDebugParameter("VX", -1, 1, 0))
+        self.list_slider_cartesian.append(p.addUserDebugParameter("VY", -1, 1, 0))
+        self.list_slider_cartesian.append(p.addUserDebugParameter("VZ", -1, 1, 0))
+        self.list_slider_cartesian.append(p.addUserDebugParameter("Theta_Dot", -1, 1, 0))    
+
+    def apply_cartesian_sliders(self):
+        action = np.empty(4, dtype=np.float64)
+        
+        for i in range(4):
+            action[i] = p.readUserDebugParameter(self.list_slider_cartesian[i])
+        
+        self.set_action(action)
+        p.stepSimulation()
+
+    def set_action(self, action):
+        cur_state = p.getLinkState(self.pandaId, self.panda_end_eff_idx)
+        cur_pos = np.array(cur_state[0])
+        cur_orien = np.array(cur_state[1])
+        
+        new_pos = cur_pos + np.array(action[:3]) * self.max_vel * self.dt
+        #new_pos = np.clip(new_pos, self.pos_space.low, self.pos_space.high) #to limit space
+        
+        jointPoses = p.calculateInverseKinematics(self.pandaId, self.panda_end_eff_idx, new_pos, cur_orien)[0:7]
+        
+        for i in range(len(jointPoses)):
+            p.setJointMotorControl2(self.pandaId, i, p.POSITION_CONTROL, jointPoses[i],force=10 * 240.)
 
 class PandaSimAuto(DefEnv):
   def __init__(self, bullet_client):
